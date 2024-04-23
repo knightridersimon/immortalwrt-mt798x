@@ -344,8 +344,42 @@ function mtkwifi.__profile_applied_settings_path(profile)
     return bak
 end
 
-function mtkwifi.get_temp(ifname)
-    return c_getTempature(ifname)['tempature']
+function mtkwifi.get_txpwr(devname)
+    local l1dat, l1 = mtkwifi.__get_l1dat()
+    local dridx = l1.DEV_RINDEX
+    local devs = mtkwifi.get_all_devs()
+
+    if devs and devs[devname] then
+        local ifname = l1dat and l1dat[dridx][devname].main_ifname
+        if ifname then
+            return c_getTxPower(ifname)['txpower']
+        end
+    end
+
+    return nil
+end
+
+function mtkwifi.get_temp(devname)
+    local vif_name = nil
+    local devs = mtkwifi.get_all_devs()
+    local dev = {}
+    dev = devs and devs[devname]
+
+    if dev.apcli and dev.apcli["state"] == "up" then
+        vif_name = dev.apcli["vifname"]
+    elseif dev.vifs then
+        for _,vif in ipairs(dev.vifs) do
+            if vif["state"] == "up" then
+                vif_name = vif["vifname"]
+                break
+            end
+        end
+    end
+
+    if vif_name then
+        return c_getTempature(vif_name)['tempature']
+    end
+        return nil
 end
 
 -- if path2 is not given, use backup of path1.
@@ -1109,11 +1143,11 @@ function mtkwifi.__setup_vifs(cfgs, devname, mainidx, subidx)
         vifs[j].__bssid = rd_pipe_output and string.match(rd_pipe_output, "%x%x:%x%x:%x%x:%x%x:%x%x:%x%x") or "?"
 
         vifs[j].__temp_ssid = mtkwifi.__trim(mtkwifi.read_pipe("iwconfig "..vifs[j].vifname.." | grep ESSID | cut -d : -f 2"))
-        vifs[j].__temp_channel = mtkwifi.read_pipe("iwconfig "..vifs[j].vifname.." | grep Channel | cut -d = -f 2 | cut -d \" \" -f 1")
-        if string.gsub(vifs[j].__temp_channel, "^%s*(.-)%s*$", "%1") == "" then
-            vifs[j].__temp_channel = mtkwifi.read_pipe("iwconfig "..vifs[j].vifname.." | grep Channel | cut -d : -f 3 | cut -d \" \" -f 1")
+        if vifs[j].state == "up" then
+            vifs[j].__wirelessmode_table = c_getWMode(vifs[j].vifname)
+        else
+            vifs[j].__wirelessmode_table = { ["getwmode"] = "" }
         end
-        vifs[j].__wirelessmode_table = c_getWMode(vifs[j].vifname)
         vifs[j].__temp_wirelessmode = vifs[j].__wirelessmode_table['getwmode']
 
         if (vifs[j].__temp_ssid ~= "") then
@@ -1122,10 +1156,8 @@ function mtkwifi.__setup_vifs(cfgs, devname, mainidx, subidx)
             vifs[j].__ssid = cfgs["SSID"..j]
         end
 
-        if (vifs[j].__temp_channel ~= "" ) then
-            vifs[j].__temp_channel = mtkwifi.__trim(vifs[j].__temp_channel)
-            vifs[j].__channel = vifs[j].__temp_channel
-        else
+        vifs[j].__channel = tonumber(c_getChannel(vifs[j].vifname)['channel'])
+        if (vifs[j].__channel < 0) then
             vifs[j].__channel = cfgs.Channel
         end
 
@@ -1166,6 +1198,8 @@ function mtkwifi.__setup_vifs(cfgs, devname, mainidx, subidx)
         vifs[j].__rrmenable = mtkwifi.token_get(cfgs.RRMEnable, j, mtkwifi.__split(cfgs.RRMEnable,";")[1])
         vifs[j].__apsd_capable = mtkwifi.token_get(cfgs.APSDCapable, j, mtkwifi.__split(cfgs.APSDCapable,";")[1])
         vifs[j].__frag_threshold = mtkwifi.token_get(cfgs.FragThreshold, j, mtkwifi.__split(cfgs.FragThreshold,";")[1])
+        vifs[j].__kickrssi = mtkwifi.token_get(cfgs.KickStaRssiLow, j, mtkwifi.__split(cfgs.KickStaRssiLow,";")[1])
+        vifs[j].__assocthres = mtkwifi.token_get(cfgs.AssocReqRssiThres, j, mtkwifi.__split(cfgs.AssocReqRssiThres,";")[1])
         vifs[j].__rts_threshold = mtkwifi.token_get(cfgs.RTSThreshold, j, mtkwifi.__split(cfgs.RTSThreshold,";")[1])
         vifs[j].__vht_sgi = mtkwifi.token_get(cfgs.VHT_SGI, j, mtkwifi.__split(cfgs.VHT_SGI,";")[1])
         vifs[j].__vht_bw_signal = mtkwifi.token_get(cfgs.VHT_BW_SIGNAL, j, mtkwifi.__split(cfgs.VHT_BW_SIGNAL,";")[1])
@@ -1258,6 +1292,7 @@ function mtkwifi.get_all_devs()
     local profiles = mtkwifi.search_dev_and_profile()
     local wpa_support = 0
     local wapi_support = 0
+    local wifi_driver_version = ""
 
     for devname,profile in mtkwifi.__spairs(profiles, function(a,b) return string.upper(a) < string.upper(b) end) do
         local fd = io.open(profile,"r")
@@ -1291,6 +1326,12 @@ function mtkwifi.get_all_devs()
                     -- Make 1st band as 2.4G and 2nd band as 5G.
                     devs[i].dbdcBandName = (devs[i].devband == 1) and "2.4G" or "5G"
                 end
+            end
+
+            if cfgs.DevEnable ~= nil then
+                devs[i].Enable = cfgs.DevEnable
+            else
+                devs[i].Enable = "1"
             end
 
             devs[i].ApCliEnable = cfgs.ApCliEnable
@@ -1404,6 +1445,10 @@ function mtkwifi.get_all_devs()
                 devs[i].version = version ~= "" and version or nil
             end
 
+            if devs[i].version ~= nil then
+                wifi_driver_version = devs[i].version
+            end
+
             -- Setup reverse indices by devname
             devs[devname] = devs[i]
 
@@ -1412,6 +1457,11 @@ function mtkwifi.get_all_devs()
             end
 
             i = i + 1
+        end
+    end
+    for _,dev in ipairs(devs) do
+        if dev.version == nil and dev.dbdc == true then
+            dev.version = wifi_driver_version
         end
     end
     devs['etherInfo'] = mtkwifi.__setup_eths()

@@ -146,12 +146,21 @@ platform_do_upgrade() {
 		redmi_ax6000_nand_upgrade_tar "$1"
 		;;
 	xiaomi,redmi-router-ax6000 |\
+	bananapi,bpi-r3mini |\
+	netcore,n60 |\
+	ruijie,rg-x60-pro* |\
+	tplink,tl-xdr608* |\
 	*snand*)
 		nand_do_upgrade "$1"
 		;;
+	bananapi,bpi-r3mini-emmc |\
+	glinet,gl-mt6000 |\
+	jdcloud,re-cp-03 |\
 	*emmc*)
-		mtk_mmc_do_upgrade "$1"
-		;;
+ 		CI_KERNPART="kernel"
+ 		CI_ROOTPART="rootfs"
+ 		emmc_do_upgrade "$1"
+ 		;;
 	*)
 		default_do_upgrade "$1"
 		;;
@@ -168,7 +177,13 @@ platform_check_image() {
 
 	case "$board" in
 	xiaomi,redmi-router-ax6000* |\
+	bananapi,bpi-r3mini* |\
+	netcore,n60 |\
+	ruijie,rg-x60-pro* |\
 	*snand* |\
+	glinet,gl-mt6000 |\
+	jdcloud,re-cp-03 |\
+	tplink,tl-xdr608* |\
 	*emmc*)
 		# tar magic `ustar`
 		magic="$(dd if="$1" bs=1 skip=257 count=5 2>/dev/null)"

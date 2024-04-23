@@ -5,6 +5,9 @@
 
 package.path = '/lib/wifi/?.lua;'..package.path
 
+local dbdc_init_ifname = "ra0"
+-- initial ifname after load mtwifi kmod driver
+
 local function esc(x)
    return (x:gsub('%%', '%%%%')
             :gsub('^%^', '%%^')
@@ -102,6 +105,25 @@ function d8021xd_chk(devname, prefix, vif, enable)
     end
 end
 
+function __exec_iwpriv_cmd(ifname, key, val)
+    local cmd = string.format("iwpriv %s set %s=%s", ifname, key, tostring(val))
+    nixio.syslog("info", "wifi-profile: iwpriv cmd: "..cmd)
+    os.execute(cmd)
+end
+
+function mtwifi_iwpriv_hook(devname)
+    local mtkwifi = require("mtkwifi")
+    local devs = mtkwifi.get_all_devs()
+    local dev = devs[devname]
+
+    if dev then
+        for _,vif in ipairs(dev.vifs) do
+            __exec_iwpriv_cmd(vif.vifname, "KickStaRssiLow", vif.__kickrssi or "0")
+            __exec_iwpriv_cmd(vif.vifname, "AssocReqRssiThres", vif.__assocthres or "0")
+        end
+    end
+end
+
 function mtwifi_up(devname)
     local nixio = require("nixio")
     local mtkwifi = require("mtkwifi")
@@ -118,14 +140,52 @@ function mtwifi_up(devname)
         end
         local profile = mtkwifi.search_dev_and_profile()[devname]
         local cfgs = mtkwifi.load_profile(profile)
-        -- we have to bring up main_ifname first, main_ifname will create all other vifs.
-        if mtkwifi.exists("/sys/class/net/"..dev.main_ifname) then
-            nixio.syslog("debug", "mtwifi_up: ifconfig "..dev.main_ifname.." up")
-            os.execute("ifconfig "..dev.main_ifname.." up")
+
+        if string.find(dev.profile_path, "dbdc") then
+            -- for dbdc mode, first bring up dbdc_init_ifname, it will create all other vifs
+            if  dev.main_ifname == dbdc_init_ifname then
+                -- current main ifname = ra0
+                if mtkwifi.exists("/sys/class/net/"..dev.main_ifname) then
+                    nixio.syslog("info", "mtwifi_up: dbdc init: ifconfig "..dbdc_init_ifname.." up")
+                    os.execute("ifconfig "..dbdc_init_ifname.." up")
+                else
+                    nixio.syslog("err", "mtwifi_up: dbdc init: "..dbdc_init_ifname.." missing, quit!")
+                    return
+                end
+            end
+            if cfgs.DevEnable ~= nil and cfgs.DevEnable == "0" then
+                nixio.syslog("info", "mtwifi_up: "..devname.." is disabled")
+                if dev.main_ifname == dbdc_init_ifname then
+                    -- current main ifname = ra0, down ra0
+                    os.execute("ifconfig "..dbdc_init_ifname.." down")
+                end
+                return
+            end
+            if dev.main_ifname ~= dbdc_init_ifname then
+                if mtkwifi.exists("/sys/class/net/"..dev.main_ifname) then
+                    nixio.syslog("info", "mtwifi_up: ifconfig "..dev.main_ifname.." up")
+                    os.execute("ifconfig "..dev.main_ifname.." up")
+                else
+                    nixio.syslog("err", "mtwifi_up: main_ifname "..dev.main_ifname.." missing, quit!")
+                    return
+                end
+            end
             add_vif_into_lan(dev.main_ifname)
         else
-            nixio.syslog("err", "mtwifi_up: main_ifname "..dev.main_ifname.." missing, quit!")
-            return
+            -- for non-dbdc mode,
+            -- we have to bring up main_ifname first, main_ifname will create all other vifs.
+            if mtkwifi.exists("/sys/class/net/"..dev.main_ifname) then
+                if cfgs.DevEnable ~= nil and cfgs.DevEnable == "0" then
+                    nixio.syslog("info", "mtwifi_up: "..devname.." is disabled")
+                    return
+                end
+                nixio.syslog("info", "mtwifi_up: ifconfig "..dev.main_ifname.." up")
+                os.execute("ifconfig "..dev.main_ifname.." up")
+                add_vif_into_lan(dev.main_ifname)
+            else
+                nixio.syslog("err", "mtwifi_up: main_ifname "..dev.main_ifname.." missing, quit!")
+                return
+            end
         end
         for _,vif in ipairs(string.split(mtkwifi.read_pipe("ls /sys/class/net"), "\n"))
         do
@@ -155,9 +215,11 @@ function mtwifi_up(devname)
             end
         end
         d8021xd_chk(devname, dev.ext_ifname, dev.main_ifname, true)
-
-    else nixio.syslog("debug", "mtwifi_up: skip "..devname..", config(l1profile) not exist")
+    else
+        nixio.syslog("debug", "mtwifi_up: skip "..devname..", config(l1profile) not exist")
     end
+
+    mtwifi_iwpriv_hook(devname)
 
     os.execute(" rm -rf /tmp/mtk/wifi/mtwifi*.need_reload")
 end
@@ -202,7 +264,8 @@ function mtwifi_down(devname)
             -- else nixio.syslog("debug", "mtwifi_down: skip "..vif..", prefix not match "..pre)
             end
         end
-    else nixio.syslog("debug", "mtwifi_down: skip "..devname..", config not exist")
+    else
+        nixio.syslog("debug", "mtwifi_down: skip "..devname..", config not exist")
     end
 
     os.execute(" rm -rf /tmp/mtk/wifi/mtwifi*.need_reload")
@@ -269,7 +332,9 @@ function mtwifi_reload(devname)
                     end
                 end
             end
-        else mtwifi_up(devname) end
+        else
+            mtwifi_up(devname)
+        end
     end
     -- for ax7800 project, close the ra0.
     if string.find(dev.profile_path, "ax7800") then

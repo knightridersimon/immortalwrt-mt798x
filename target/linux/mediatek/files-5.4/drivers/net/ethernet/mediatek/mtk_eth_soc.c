@@ -20,7 +20,9 @@
 #include <linux/pinctrl/devinfo.h>
 #include <linux/phylink.h>
 #include <net/dsa.h>
-
+#include <linux/of_platform.h>
+#include <linux/of_gpio.h>
+#include <linux/of_irq.h>
 #include "mtk_eth_soc.h"
 #include "mtk_eth_dbg.h"
 #include "mtk_eth_reset.h"
@@ -28,7 +30,7 @@
 #if defined(CONFIG_NET_MEDIATEK_HNAT) || defined(CONFIG_NET_MEDIATEK_HNAT_MODULE)
 #include "mtk_hnat/nf_hnat_mtk.h"
 #endif
-
+static struct mtk_eth *sg_eth;
 static int mtk_msg_level = -1;
 atomic_t reset_lock = ATOMIC_INIT(0);
 atomic_t force = ATOMIC_INIT(0);
@@ -87,7 +89,7 @@ u32 mtk_m32(struct mtk_eth *eth, u32 mask, u32 set, unsigned reg)
 	return reg;
 }
 
-static int mtk_mdio_busy_wait(struct mtk_eth *eth)
+int mtk_mdio_busy_wait(struct mtk_eth *eth)
 {
 	unsigned long t_start = jiffies;
 
@@ -832,7 +834,7 @@ static inline bool mtk_rx_get_desc(struct mtk_rx_dma *rxd,
 	rxd->rxd1 = READ_ONCE(dma_rxd->rxd1);
 	rxd->rxd3 = READ_ONCE(dma_rxd->rxd3);
 	rxd->rxd4 = READ_ONCE(dma_rxd->rxd4);
-#if defined(CONFIG_MEDIATEK_NETSYS_V2)
+#if defined(CONFIG_MEDIATEK_NETSYS_RX_V2)
 	rxd->rxd5 = READ_ONCE(dma_rxd->rxd5);
 	rxd->rxd6 = READ_ONCE(dma_rxd->rxd6);
 #endif
@@ -1077,7 +1079,7 @@ static int mtk_tx_map(struct sk_buff *skb, struct net_device *dev,
 	if (HNAT_SKB_CB2(skb)->magic == 0x78681415) {
 		if (MTK_HAS_CAPS(eth->soc->caps, MTK_NETSYS_V2)) {
 			txd4 &= ~(0xf << TX_DMA_FPORT_SHIFT_V2);
-			txd4 |= 0x4 << TX_DMA_FPORT_SHIFT_V2;
+			txd4 |= 0x3 << TX_DMA_FPORT_SHIFT_V2;
 		} else {
 			txd4 &= ~(0x7 << TX_DMA_FPORT_SHIFT);
 			txd4 |= 0x4 << TX_DMA_FPORT_SHIFT;
@@ -1401,15 +1403,17 @@ static int mtk_poll_rx(struct napi_struct *napi, int budget,
 		if (MTK_HAS_CAPS(eth->soc->caps, MTK_SOC_MT7628)) {
 			mac = 0;
 		} else {
-#if defined(CONFIG_MEDIATEK_NETSYS_V2)
-			if (MTK_HAS_CAPS(eth->soc->caps, MTK_NETSYS_V2))
+#if defined(CONFIG_MEDIATEK_NETSYS_RX_V2)
+			if (MTK_HAS_CAPS(eth->soc->caps, MTK_NETSYS_RX_V2))
 				mac = RX_DMA_GET_SPORT(trxd.rxd5) - 1;
 			else
 #endif
 				mac = (trxd.rxd4 & RX_DMA_SPECIAL_TAG) ?
 				      0 : RX_DMA_GET_SPORT(trxd.rxd4) - 1;
 		}
-
+		
+		if (mac == 4) mac = 0;
+		
 		if (unlikely(mac < 0 || mac >= MTK_MAC_COUNT ||
 			     !eth->netdev[mac]))
 			goto release_desc;
@@ -1452,9 +1456,9 @@ static int mtk_poll_rx(struct napi_struct *napi, int budget,
 		skb->dev = netdev;
 		skb_put(skb, pktlen);
 
-		if ((!MTK_HAS_CAPS(eth->soc->caps, MTK_NETSYS_V2) &&
+		if ((!MTK_HAS_CAPS(eth->soc->caps, MTK_NETSYS_RX_V2) &&
 				  (trxd.rxd4 & eth->rx_dma_l4_valid)) ||
-		    (MTK_HAS_CAPS(eth->soc->caps, MTK_NETSYS_V2) &&
+		    (MTK_HAS_CAPS(eth->soc->caps, MTK_NETSYS_RX_V2) &&
 				  (trxd.rxd3 & eth->rx_dma_l4_valid)))
 			skb->ip_summed = CHECKSUM_UNNECESSARY;
 		else
@@ -1462,7 +1466,7 @@ static int mtk_poll_rx(struct napi_struct *napi, int budget,
 		skb->protocol = eth_type_trans(skb, netdev);
 
 		if (netdev->features & NETIF_F_HW_VLAN_CTAG_RX) {
-			if (MTK_HAS_CAPS(eth->soc->caps, MTK_NETSYS_V2)) {
+			if (MTK_HAS_CAPS(eth->soc->caps, MTK_NETSYS_RX_V2)) {
 				if (trxd.rxd3 & RX_DMA_VTAG_V2)
 					__vlan_hwaccel_put_tag(skb,
 					htons(RX_DMA_VPID_V2(trxd.rxd4)),
@@ -1485,8 +1489,8 @@ static int mtk_poll_rx(struct napi_struct *napi, int budget,
 		}
 
 #if defined(CONFIG_NET_MEDIATEK_HNAT) || defined(CONFIG_NET_MEDIATEK_HNAT_MODULE)
-#if defined(CONFIG_MEDIATEK_NETSYS_V2)
-		if (MTK_HAS_CAPS(eth->soc->caps, MTK_NETSYS_V2))
+#if defined(CONFIG_MEDIATEK_NETSYS_RX_V2)
+		if (MTK_HAS_CAPS(eth->soc->caps, MTK_NETSYS_RX_V2))
 			*(u32 *)(skb->head) = trxd.rxd5;
 		else
 #endif
@@ -1920,7 +1924,7 @@ static int mtk_rx_alloc(struct mtk_eth *eth, int ring_no, int rx_flag)
 
 		ring->dma[i].rxd3 = 0;
 		ring->dma[i].rxd4 = 0;
-#if defined(CONFIG_MEDIATEK_NETSYS_V2)
+#if defined(CONFIG_MEDIATEK_NETSYS_RX_V2)
 		if (eth->soc->has_sram && ((sizeof(struct mtk_rx_dma)) > 16)) {
 			ring->dma[i].rxd5 = 0;
 			ring->dma[i].rxd6 = 0;
@@ -2037,7 +2041,7 @@ static int mtk_hwlro_rx_init(struct mtk_eth *eth)
 	/* the minimal remaining room of SDL0 in RXD for lro aggregation */
 	lro_ctrl_dw3 |= MTK_LRO_MIN_RXD_SDL;
 
-	if (MTK_HAS_CAPS(eth->soc->caps, MTK_NETSYS_V2)) {
+	if (MTK_HAS_CAPS(eth->soc->caps, MTK_NETSYS_RX_V2)) {
 		val = mtk_r32(eth, MTK_PDMA_RX_CFG);
 		mtk_w32(eth, val | (MTK_PDMA_LRO_SDL << MTK_RX_CFG_SDL_OFFSET),
 			MTK_PDMA_RX_CFG);
@@ -2093,7 +2097,7 @@ static void mtk_hwlro_val_ipaddr(struct mtk_eth *eth, int idx, __be32 ip)
 {
 	u32 reg_val;
 
-	if (MTK_HAS_CAPS(eth->soc->caps, MTK_NETSYS_V2))
+	if (MTK_HAS_CAPS(eth->soc->caps, MTK_NETSYS_RX_V2))
 		idx += 1;
 
 	reg_val = mtk_r32(eth, MTK_LRO_CTRL_DW2_CFG(idx));
@@ -2111,7 +2115,7 @@ static void mtk_hwlro_inval_ipaddr(struct mtk_eth *eth, int idx)
 {
 	u32 reg_val;
 
-	if (MTK_HAS_CAPS(eth->soc->caps, MTK_NETSYS_V2))
+	if (MTK_HAS_CAPS(eth->soc->caps, MTK_NETSYS_RX_V2))
 		idx += 1;
 
 	reg_val = mtk_r32(eth, MTK_LRO_CTRL_DW2_CFG(idx));
@@ -2245,7 +2249,7 @@ static int mtk_rss_init(struct mtk_eth *eth)
 {
 	u32 val;
 
-	if (!MTK_HAS_CAPS(eth->soc->caps, MTK_NETSYS_V2)) {
+	if (!MTK_HAS_CAPS(eth->soc->caps, MTK_NETSYS_RX_V2)) {
 		/* Set RSS rings to PSE modes */
 		val =  mtk_r32(eth, MTK_LRO_CTRL_DW2_CFG(1));
 		val |= MTK_RING_PSE_MODE;
@@ -2418,7 +2422,7 @@ static int mtk_dma_init(struct mtk_eth *eth)
 		return err;
 
 	if (eth->hwlro) {
-		i = (MTK_HAS_CAPS(eth->soc->caps, MTK_NETSYS_V2)) ? 4 : 1;
+		i = (MTK_HAS_CAPS(eth->soc->caps, MTK_NETSYS_RX_V2)) ? 4 : 1;
 		for (; i < MTK_MAX_RX_RING_NUM; i++) {
 			err = mtk_rx_alloc(eth, i, MTK_RX_FLAGS_HWLRO);
 			if (err)
@@ -2468,7 +2472,7 @@ static void mtk_dma_free(struct mtk_eth *eth)
 		eth->phy_scratch_ring = 0;
 	}
 	mtk_tx_clean(eth);
-	mtk_rx_clean(eth, &eth->rx_ring[0],1);
+	mtk_rx_clean(eth, &eth->rx_ring[0],eth->soc->has_sram);
 	mtk_rx_clean(eth, &eth->rx_ring_qdma,0);
 
 	if (eth->hwlro) {
@@ -2582,7 +2586,7 @@ static int mtk_start_dma(struct mtk_eth *eth)
 				MTK_NDP_CO_PRO | MTK_MUTLI_CNT |
 				MTK_RESV_BUF | MTK_WCOMP_EN |
 				MTK_DMAD_WR_WDONE | MTK_CHK_DDONE_EN |
-				MTK_RX_2B_OFFSET | MTK_PKT_RX_WDONE, MTK_QDMA_GLO_CFG);
+				MTK_RX_2B_OFFSET, MTK_QDMA_GLO_CFG);
 		}
 		else
 			mtk_w32(eth,
@@ -2603,7 +2607,7 @@ static int mtk_start_dma(struct mtk_eth *eth)
 			MTK_PDMA_GLO_CFG);
 	}
 
-	if (MTK_HAS_CAPS(eth->soc->caps, MTK_NETSYS_V2) && eth->hwlro) {
+	if (MTK_HAS_CAPS(eth->soc->caps, MTK_NETSYS_RX_V2) && eth->hwlro) {
 		val = mtk_r32(eth, MTK_PDMA_GLO_CFG);
 		mtk_w32(eth, val | MTK_RX_DMA_LRO_EN, MTK_PDMA_GLO_CFG);
 	}
@@ -2887,7 +2891,7 @@ static int mtk_hw_init(struct mtk_eth *eth, u32 type)
 	else
 		mtk_eth_cold_reset(eth);
 
-	if (MTK_HAS_CAPS(eth->soc->caps, MTK_NETSYS_V2)) {
+	if (MTK_HAS_CAPS(eth->soc->caps, MTK_NETSYS_RX_V2)) {
 		/* Set FE to PDMAv2 if necessary */
 		mtk_w32(eth, mtk_r32(eth, MTK_FE_GLO_MISC) | MTK_PDMA_V2, MTK_FE_GLO_MISC);
 	}
@@ -3074,10 +3078,15 @@ static void mtk_pending_work(struct work_struct *work)
 	mtk_prepare_reset_fe(eth);
 
 	/* Trigger Wifi SER reset */
-	call_netdevice_notifiers(MTK_FE_START_RESET, eth->netdev[0]);
-	rtnl_unlock();
-	wait_for_completion_timeout(&wait_ser_done, 5000);
-	rtnl_lock();
+	for (i = 0; i < MTK_MAC_COUNT; i++) {
+		if (!eth->netdev[i])
+			continue;
+		call_netdevice_notifiers(MTK_FE_START_RESET, eth->netdev[i]);
+		rtnl_unlock();
+		wait_for_completion_timeout(&wait_ser_done, 5000);
+		rtnl_lock();
+		break;
+	}
 
 	while (test_and_set_bit_lock(MTK_RESETTING, &eth->state))
 		cpu_relax();
@@ -3086,7 +3095,7 @@ static void mtk_pending_work(struct work_struct *work)
 	pr_info("[%s] mtk_stop starts !\n", __func__);
 	/* stop all devices to make sure that dma is properly shut down */
 	for (i = 0; i < MTK_MAC_COUNT; i++) {
-		if (!eth->netdev[i])
+		if (!eth->netdev[i] || !netif_running(eth->netdev[i]))
 			continue;
 		mtk_stop(eth->netdev[i]);
 		__set_bit(i, &restart);
@@ -3104,7 +3113,7 @@ static void mtk_pending_work(struct work_struct *work)
 
 	/* restart DMA and enable IRQs */
 	for (i = 0; i < MTK_MAC_COUNT; i++) {
-		if (!test_bit(i, &restart))
+		if (!test_bit(i, &restart) || !eth->netdev[i])
 			continue;
 		err = mtk_open(eth->netdev[i]);
 		if (err) {
@@ -3128,6 +3137,8 @@ static void mtk_pending_work(struct work_struct *work)
 
 	/* Power up sgmii */
 	for (i = 0; i < MTK_MAC_COUNT; i++) {
+		if (!eth->netdev[i])
+			continue;
 		mac = netdev_priv(eth->netdev[i]);
 		phy_node = of_parse_phandle(mac->of_node, "phy-handle", 0);
 		if (!phy_node && eth->sgmii->regmap[i]) {
@@ -3136,11 +3147,15 @@ static void mtk_pending_work(struct work_struct *work)
 		}
 	}
 
-	call_netdevice_notifiers(MTK_FE_RESET_NAT_DONE, eth->netdev[0]);
-	pr_info("[%s] HNAT reset done !\n", __func__);
-
-	call_netdevice_notifiers(MTK_FE_RESET_DONE, eth->netdev[0]);
-	pr_info("[%s] WiFi SER reset done !\n", __func__);
+	for (i = 0; i < MTK_MAC_COUNT; i++) {
+		if (!eth->netdev[i])
+			continue;
+		call_netdevice_notifiers(MTK_FE_RESET_NAT_DONE, eth->netdev[i]);
+		pr_info("[%s] HNAT reset done !\n", __func__);
+		call_netdevice_notifiers(MTK_FE_RESET_DONE, eth->netdev[i]);
+		pr_info("[%s] WiFi SER reset done !\n", __func__);
+		break;
+	}
 
 	atomic_dec(&reset_lock);
 	if (atomic_read(&force) > 0)
@@ -3495,11 +3510,11 @@ static int mtk_probe(struct platform_device *pdev)
 	struct device_node *mac_np;
 	struct mtk_eth *eth;
 	int err, i;
-
+	static int ext_init = 0;
 	eth = devm_kzalloc(&pdev->dev, sizeof(*eth), GFP_KERNEL);
 	if (!eth)
 		return -ENOMEM;
-
+	sg_eth = eth;
 	eth->soc = of_device_get_match_data(&pdev->dev);
 
 	eth->dev = &pdev->dev;
@@ -3614,6 +3629,8 @@ static int mtk_probe(struct platform_device *pdev)
 	eth->hwlro = MTK_HAS_CAPS(eth->soc->caps, MTK_HWLRO);
 
 	for_each_child_of_node(pdev->dev.of_node, mac_np) {
+		int ext_reset_pin = -1;
+		int ret = -1;
 		if (!of_device_is_compatible(mac_np,
 					     "mediatek,eth-mac"))
 			continue;
@@ -3625,7 +3642,22 @@ static int mtk_probe(struct platform_device *pdev)
 		if (err) {
 			of_node_put(mac_np);
 			goto err_deinit_hw;
+			}
+			
+		ext_reset_pin = of_get_named_gpio(mac_np, "ext-phy-reset-gpios", 0);
+		if (ext_reset_pin >= 0){
+			dev_info(&pdev->dev, "Ext-phy gpio : %d\n", ext_reset_pin);
+			ret = devm_gpio_request(&pdev->dev, ext_reset_pin, "mt753x-reset");
+			if (!ret)
+			{
+				
+				gpio_direction_output(ext_reset_pin, 0);
+				msleep(300);
+				gpio_set_value(ext_reset_pin, 1);
+				msleep(500);
+			}
 		}
+		
 	}
 
 	err = mtk_napi_init(eth);
@@ -3721,6 +3753,19 @@ static int mtk_probe(struct platform_device *pdev)
 	add_timer(&eth->mtk_dma_monitor_timer);
 #endif
 
+	if (!ext_init){
+	for_each_child_of_node(pdev->dev.of_node, mac_np) {
+		unsigned int ext_phy_reg = 0;
+		int err = -1;
+		err = of_property_read_u32_index(mac_np, "ext-phy-reg", 0, &ext_phy_reg);
+		
+		if (err >= 0){
+			dev_info(&pdev->dev, "Ext-phy reg : %d\n", ext_phy_reg);
+			mtk_soc_extphy_init(eth, ext_phy_reg);
+		}	
+	}
+        ext_init = 1;
+	}
 	return 0;
 
 err_deinit_mdio:
@@ -3814,7 +3859,7 @@ static const struct mtk_soc_data mt7986_data = {
 	.hw_features = MTK_HW_FEATURES,
 	.required_clks = MT7986_CLKS_BITMAP,
 	.required_pctl = false,
-	.has_sram = true,
+	.has_sram = false,
 };
 
 static const struct mtk_soc_data mt7981_data = {
@@ -3823,7 +3868,7 @@ static const struct mtk_soc_data mt7981_data = {
 	.hw_features = MTK_HW_FEATURES,
 	.required_clks = MT7981_CLKS_BITMAP,
 	.required_pctl = false,
-	.has_sram = true,
+	.has_sram = false,
 };
 
 static const struct mtk_soc_data rt5350_data = {

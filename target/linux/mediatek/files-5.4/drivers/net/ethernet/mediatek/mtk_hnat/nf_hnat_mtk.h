@@ -23,7 +23,7 @@ struct hnat_skb_cb2 {
 	__u32 magic;
 };
 
-#if defined(CONFIG_MEDIATEK_NETSYS_V2)
+#if defined(CONFIG_MEDIATEK_NETSYS_RX_V2)
 struct hnat_desc {
 	u32 entry : 15;
 	u32 filled : 3;
@@ -46,13 +46,13 @@ struct hnat_desc {
 	u32 crsn : 5;
 	u32 sport : 4;
 	u32 alg : 1;
-	u32 iface : 4;
+	u32 iface : 8;
+	u32 ppe : 1;
 	u32 filled : 3;
-	u32 resv : 1;
 	u32 magic_tag_protect : 16;
 	u32 wdmaid : 8;
 	u32 rxid : 2;
-	u32 wcid : 8;
+	u32 wcid : 10;
 	u32 bssid : 6;
 } __packed;
 #endif
@@ -81,7 +81,7 @@ struct hnat_desc {
 #define skb_hnat_wc_id(skb) (((struct hnat_desc *)((skb)->head))->wcid)
 #define skb_hnat_bss_id(skb) (((struct hnat_desc *)((skb)->head))->bssid)
 #define skb_hnat_ppe(skb)				\
-	((skb_hnat_iface(skb) == FOE_MAGIC_WED1 && CFG_PPE_NUM > 1) ? 1 : 0)
+	(((skb_hnat_sport(skb) == NR_GMAC2_PORT) && (CFG_PPE_NUM >= 2)) ? 1 : 0)
 #define do_ext2ge_fast_try(dev, skb)						\
 	((skb_hnat_iface(skb) == FOE_MAGIC_EXT) && !is_from_extge(skb))
 #define set_from_extge(skb) (HNAT_SKB_CB2(skb)->magic = 0x78786688)

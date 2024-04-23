@@ -143,7 +143,11 @@
 #define MTK_PDMA_V2		BIT(4)
 
 #if defined(CONFIG_MEDIATEK_NETSYS_V2)
+#if defined(CONFIG_MEDIATEK_NETSYS_RX_V2)
 #define PDMA_BASE               0x6000
+#else
+#define PDMA_BASE               0x4000
+#endif
 #define QDMA_BASE               0x4400
 #define WDMA_BASE(x)		(0x4800 + ((x) * 0x400))
 #define PPE_BASE(x)		(0x2200 + ((x) * 0x400))
@@ -171,7 +175,7 @@
 
 /* PDMA HW LRO Control Registers */
 #define BITS(m, n)			(~(BIT(m) - 1) & ((BIT(n) - 1) | BIT(n)))
-#if defined(CONFIG_MEDIATEK_NETSYS_V2)
+#if defined(CONFIG_MEDIATEK_NETSYS_RX_V2)
 #define MTK_MAX_RX_RING_NUM		(8)
 #define MTK_HW_LRO_RING_NUM		(4)
 #define IS_HW_LRO_RING(ring_no)		(((ring_no) > 3) && ((ring_no) < 8))
@@ -215,14 +219,14 @@
 #define MTK_LRO_MIN_RXD_SDL	(MTK_HW_LRO_SDL_REMAIN_ROOM << 16)
 
 /* PDMA RSS Control Registers */
-#if defined(CONFIG_MEDIATEK_NETSYS_V2)
+#if defined(CONFIG_MEDIATEK_NETSYS_RX_V2)
 #define MTK_PDMA_RSS_GLO_CFG		(PDMA_BASE + 0x800)
 #define MTK_RX_NAPI_NUM			(2)
 #define MTK_MAX_IRQ_NUM			(4)
 #else
-#define MTK_PDMA_RSS_GLO_CFG		0x3000
-#define MTK_RX_NAPI_NUM			(1)
-#define MTK_MAX_IRQ_NUM			(3)
+#define MTK_PDMA_RSS_GLO_CFG		0x2800
+#define MTK_RX_NAPI_NUM			(2)
+#define MTK_MAX_IRQ_NUM			(4)
 #endif
 #define MTK_RSS_RING1			(1)
 #define MTK_RSS_EN			BIT(0)
@@ -274,7 +278,7 @@
 /* PDMA Interrupt grouping registers */
 #define MTK_PDMA_INT_GRP1	(PDMA_BASE + 0x250)
 #define MTK_PDMA_INT_GRP2	(PDMA_BASE + 0x254)
-#if defined(CONFIG_MEDIATEK_NETSYS_V2)
+#if defined(CONFIG_MEDIATEK_NETSYS_RX_V2)
 #define MTK_PDMA_INT_GRP3	(PDMA_BASE + 0x258)
 #else
 #define MTK_PDMA_INT_GRP3	(PDMA_BASE + 0x22c)
@@ -283,7 +287,7 @@
 #define MTK_MAX_DELAY_INT	0x8f0f8f0f
 
 /* PDMA HW LRO IP Setting Registers */
-#if defined(CONFIG_MEDIATEK_NETSYS_V2)
+#if defined(CONFIG_MEDIATEK_NETSYS_RX_V2)
 #define MTK_LRO_RX_RING0_DIP_DW0	(PDMA_BASE + 0x414)
 #else
 #define MTK_LRO_RX_RING0_DIP_DW0	(PDMA_BASE + 0x304)
@@ -399,12 +403,13 @@
 
 /* QDMA Interrupt Status Register */
 #define MTK_QDMA_INT_STATUS	(QDMA_BASE + 0x218)
-#if defined(CONFIG_MEDIATEK_NETSYS_V2)
+#if defined(CONFIG_MEDIATEK_NETSYS_RX_V2)
 #define MTK_RX_DONE_INT(ring_no)		\
 	((ring_no)? BIT(16 + (ring_no)) : BIT(14))
 #else
-#define MTK_RX_DONE_INT(ring_no)		\
-	((ring_no)? BIT(24 + (ring_no)) : BIT(30))
+#define MTK_RX_DONE_INT(ring_no)						\
+	(MTK_HAS_CAPS(eth->soc->caps, MTK_RSS) ? ((ring_no) ? BIT(24 + (ring_no)) : BIT(30)) :	\
+	(BIT(16 + (ring_no))))
 #endif
 #define MTK_RX_DONE_INT3	BIT(19)
 #define MTK_RX_DONE_INT2	BIT(18)
@@ -473,13 +478,13 @@
 #define MTK_STAT_OFFSET		0x40
 
 /* QDMA TX NUM */
-#define MTK_QDMA_TX_NUM		16
+#define MTK_QDMA_TX_NUM		64
 #define MTK_QDMA_TX_MASK	((MTK_QDMA_TX_NUM) - 1)
 #define QID_LOW_BITS(x)         ((x) & 0xf)
 #define QID_HIGH_BITS(x)        ((((x) >> 4) & 0x3) << 20)
 #define QID_BITS_V2(x)		(((x) & 0x3f) << 16)
 
-#define MTK_QDMA_GMAC2_QID	8
+#define MTK_QDMA_GMAC2_QID	32
 
 /* QDMA V2 descriptor txd6 */
 #define TX_DMA_INS_VLAN_V2         BIT(16)
@@ -501,7 +506,7 @@
 #define MTK_TX_DMA_BUF_SHIFT    16
 #endif
 
-#if defined(CONFIG_MEDIATEK_NETSYS_V2)
+#if defined(CONFIG_MEDIATEK_NETSYS_RX_V2)
 #define MTK_RX_DMA_BUF_LEN      0xffff
 #define MTK_RX_DMA_BUF_SHIFT    8
 #define RX_DMA_SPORT_SHIFT      26
@@ -586,7 +591,7 @@
 /* Mac control registers */
 #define MTK_MAC_MCR(x)		(0x10100 + (x * 0x100))
 #define MAC_MCR_MAX_RX_1536	BIT(24)
-#define MAC_MCR_IPG_CFG		(BIT(18) | BIT(16))
+#define MAC_MCR_IPG_CFG		(BIT(18) | BIT(16) | BIT(12))
 #define MAC_MCR_FORCE_MODE	BIT(15)
 #define MAC_MCR_TX_EN		BIT(14)
 #define MAC_MCR_RX_EN		BIT(13)
@@ -768,12 +773,31 @@
 #define MT7628_SDM_MAC_ADRL	(MT7628_SDM_OFFSET + 0x0c)
 #define MT7628_SDM_MAC_ADRH	(MT7628_SDM_OFFSET + 0x10)
 
+/*MDIO control*/
+#define MII_MMD_ACC_CTL_REG             0x0d
+#define MII_MMD_ADDR_DATA_REG           0x0e
+#define MMD_OP_MODE_DATA BIT(14)
+struct mtk_eth;
+/* mmd */
+int mtk_mmd_read(struct mtk_eth *eth, int addr, int devad, u16 reg);
+void mtk_mmd_write(struct mtk_eth *eth, int addr, int devad, u16 reg,
+               u16 val);
+
+
+struct mtk_extphy_id
+{
+	u32 phy_id;
+	u32 phy_id_mask;
+	u32 is_c45;
+	int (*init)(struct mtk_eth *, int addr);
+};
+
 struct mtk_rx_dma {
 	unsigned int rxd1;
 	unsigned int rxd2;
 	unsigned int rxd3;
 	unsigned int rxd4;
-#if defined(CONFIG_MEDIATEK_NETSYS_V2)
+#if defined(CONFIG_MEDIATEK_NETSYS_RX_V2)
 	unsigned int rxd5;
 	unsigned int rxd6;
 	unsigned int rxd7;
@@ -1022,6 +1046,7 @@ enum mkt_eth_capabilities {
 	MTK_TRGMII_MT7621_CLK_BIT,
 	MTK_QDMA_BIT,
 	MTK_NETSYS_V2_BIT,
+	MTK_NETSYS_RX_V2_BIT,
 	MTK_SOC_MT7628_BIT,
 	MTK_RSTCTRL_PPE1_BIT,
 	MTK_U3_COPHY_V2_BIT,
@@ -1058,6 +1083,7 @@ enum mkt_eth_capabilities {
 #define MTK_TRGMII_MT7621_CLK	BIT(MTK_TRGMII_MT7621_CLK_BIT)
 #define MTK_QDMA		BIT(MTK_QDMA_BIT)
 #define MTK_NETSYS_V2		BIT(MTK_NETSYS_V2_BIT)
+#define MTK_NETSYS_RX_V2	BIT(MTK_NETSYS_RX_V2_BIT)
 #define MTK_SOC_MT7628		BIT(MTK_SOC_MT7628_BIT)
 #define MTK_RSTCTRL_PPE1	BIT(MTK_RSTCTRL_PPE1_BIT)
 #define MTK_U3_COPHY_V2		BIT(MTK_U3_COPHY_V2_BIT)
@@ -1135,7 +1161,7 @@ enum mkt_eth_capabilities {
 
 #define MT7986_CAPS   (MTK_GMAC1_SGMII | MTK_GMAC2_SGMII | \
                        MTK_MUX_GMAC12_TO_GEPHY_SGMII | MTK_QDMA | \
-                       MTK_NETSYS_V2)
+                       MTK_NETSYS_V2 | MTK_NETSYS_RX_V2)
 
 #define MT7981_CAPS   (MTK_GMAC1_SGMII | MTK_GMAC2_SGMII | MTK_GMAC2_GEPHY | \
 			MTK_MUX_GMAC12_TO_GEPHY_SGMII | MTK_QDMA | \
@@ -1318,5 +1344,6 @@ int mtk_gmac_gephy_path_setup(struct mtk_eth *eth, int mac_id);
 int mtk_gmac_rgmii_path_setup(struct mtk_eth *eth, int mac_id);
 void mtk_gdm_config(struct mtk_eth *eth, u32 id, u32 config);
 void ethsys_reset(struct mtk_eth *eth, u32 reset_bits);
-
+int mtk_soc_extphy_init(struct mtk_eth *eth, int addr);
+int mtk_mdio_busy_wait(struct mtk_eth *eth);
 #endif /* MTK_ETH_H */

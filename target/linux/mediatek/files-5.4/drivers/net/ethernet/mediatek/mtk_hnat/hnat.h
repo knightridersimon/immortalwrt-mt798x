@@ -593,17 +593,9 @@ struct foe_entry {
 	};
 };
 
-/* If user wants to change default FOE entry number, both DEF_ETRY_NUM and
- * DEF_ETRY_NUM_CFG need to be modified.
- */
-#define DEF_ETRY_NUM		32768
-/* feasible values : 32768, 16384, 8192, 4096, 2048, 1024 */
-#define DEF_ETRY_NUM_CFG	TABLE_32K
-/* corresponding values : TABLE_32K, TABLE_16K, TABLE_8K, TABLE_4K, TABLE_2K,
- * TABLE_1K
- */
 #define MAX_EXT_DEVS		(0x3fU)
 #define MAX_IF_NUM		64
+#define MAX_EXT_PREFIX_NUM	8
 
 #if defined(CONFIG_MEDIATEK_NETSYS_V2)
 #define MAX_PPE_NUM		2
@@ -611,6 +603,7 @@ struct foe_entry {
 #define MAX_PPE_NUM		1
 #endif
 #define CFG_PPE_NUM		(hnat_priv->ppe_num)
+#define HNAT_EXCEPTION_TAG	0x99
 
 struct mib_entry {
 	u32 byt_cnt_l;
@@ -677,12 +670,15 @@ struct mtk_hnat {
 	struct net_device *g_wandev;
 	struct net_device *wifi_hook_if[MAX_IF_NUM];
 	struct extdev_entry *ext_if[MAX_EXT_DEVS];
+	const char *ext_if_prefix[MAX_EXT_PREFIX_NUM];
 	struct timer_list hnat_sma_build_entry_timer;
 	struct timer_list hnat_reset_timestamp_timer;
 	struct timer_list hnat_mcast_check_timer;
 	bool nf_stat_en;
 	bool ipv6_en;
 	bool guest_en;
+	bool dscp_en;
+	bool macvlan_support;
 };
 
 struct extdev_entry {
@@ -738,6 +734,22 @@ enum FoeIpAct {
 #define HASH_MODE_2 2
 #define HASH_MODE_3 3
 
+/* If user wants to change default FOE entry number, both DEF_ETRY_NUM and
+ * DEF_ETRY_NUM_CFG need to be modified.
+ */
+
+#if defined(CONFIG_MEDIATEK_NETSYS_RX_V2)
+#define DEF_ETRY_NUM		32768
+/* feasible values : 32768, 16384, 8192, 4096, 2048, 1024 */
+#define DEF_ETRY_NUM_CFG	TABLE_32K
+/* corresponding values : TABLE_32K, TABLE_16K, TABLE_8K, TABLE_4K, TABLE_2K,
+ * TABLE_1K
+ */
+#else
+#define DEF_ETRY_NUM		16384
+#define DEF_ETRY_NUM_CFG	TABLE_16K
+#endif
+
 /*PPE_FLOW_CFG*/
 #define BIT_FUC_FOE BIT(2)
 #define BIT_FMC_FOE BIT(1)
@@ -764,6 +776,15 @@ enum FoeIpAct {
 #define BITS_GDM_ALL_FRC_P_PPE                                              \
 	(BITS_GDM_UFRC_P_PPE | BITS_GDM_BFRC_P_PPE | BITS_GDM_MFRC_P_PPE |  \
 	 BITS_GDM_OFRC_P_PPE)
+	 
+#define BITS_GDM_UFRC_P_PPE1 (NR_PPE1_PORT << 12)
+#define BITS_GDM_BFRC_P_PPE1 (NR_PPE1_PORT << 8)
+#define BITS_GDM_MFRC_P_PPE1 (NR_PPE1_PORT << 4)
+#define BITS_GDM_OFRC_P_PPE1 (NR_PPE1_PORT << 0)
+#define BITS_GDM_ALL_FRC_P_PPE1					\
+ 	(BITS_GDM_UFRC_P_PPE1 | BITS_GDM_BFRC_P_PPE1 |		\
+ 	 BITS_GDM_MFRC_P_PPE1 | BITS_GDM_OFRC_P_PPE1)
+
 
 #define BITS_GDM_UFRC_P_CPU_PDMA (NR_PDMA_PORT << 12)
 #define BITS_GDM_BFRC_P_CPU_PDMA (NR_PDMA_PORT << 8)
@@ -842,8 +863,9 @@ enum FoeIpAct {
 #define NR_WDMA1_PORT 9
 #define LAN_DEV_NAME hnat_priv->lan
 #define IS_WAN(dev)                                                            \
-	(!strncmp((dev)->name, hnat_priv->wan, strlen(hnat_priv->wan)))
-#define IS_LAN(dev) (!strncmp(dev->name, LAN_DEV_NAME, strlen(LAN_DEV_NAME)))
+	((!strncmp((dev)->name, hnat_priv->wan, strlen(hnat_priv->wan))) || ((!strncmp((dev)->name, "macvlan", 7)) && \
+		(hnat_priv->macvlan_support)))
+#define IS_LAN(dev) (!strncmp(dev->name, LAN_DEV_NAME, strlen(LAN_DEV_NAME))) 
 #define IS_BR(dev) (!strncmp(dev->name, "br", 2))
 #define IS_WHNAT(dev)								\
 	((hnat_priv->data->whnat &&						\
